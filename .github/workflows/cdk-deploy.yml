@@ -1,0 +1,130 @@
+name: CDK Deploy (with Secrets)
+
+on:
+  pull_request:
+    branches: [ master ]
+  push:
+    branches: [ master ]
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  cdk-diff:
+    name: CDK Diff (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install AWS CDK CLI
+        run: npm i -g aws-cdk
+
+      - name: Configure AWS (from repo-level secrets or environment secrets - here repo-level)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws --version
+          echo "AWS Region: $AWS_REGION"
+
+      - name: Build
+        run: npm run build
+
+      - name: CDK Synth
+        run: npm run synth
+      - name: Upload synthesized template
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk.out
+          path: cdk.out
+
+      - name: CDK Diff (no approvals)
+        run: npm run diff
+
+  deploy:
+    name: Deploy Matrix (main)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [ dev, uat, prod ]
+
+    environment:
+      name: ${{ matrix.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install AWS CDK CLI
+        run: npm i -g aws-cdk
+
+      - name: Configure AWS Credentials (basic)
+        if: ${{ !secrets.ROLE_TO_ASSUME }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint & Test
+        run: |
+          npm run lint
+          npm test
+
+      - name: CDK Synth
+        run: npm run synth
+
+      - name: Upload synthesized template
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk.out-${{ matrix.environment }}
+          path: cdk.out
+
+      - name: CDK Deploy (${{ matrix.environment }})
+        env:
+          CDK_STACK_NAME: ${{ secrets.CDK_STACK_NAME }}
+        run: |
+          if [ -z "$CDK_STACK_NAME" ]; then
+            echo "ERROR: Debes definir el secret CDK_STACK_NAME en el environment ${{ matrix.environment }}"
+            exit 1
+          fi
+          echo "Deploying stack: $CDK_STACK_NAME"
+          npm run deploy -- $CDK_STACK_NAME
