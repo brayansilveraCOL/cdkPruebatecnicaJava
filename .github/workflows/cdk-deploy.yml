@@ -73,7 +73,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        environment: [ develop, uat, prod ]
+        environment: [ develop]
 
     environment:
       name: ${{ matrix.environment }}
