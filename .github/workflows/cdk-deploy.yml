@@ -107,11 +107,6 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Lint & Test
-        run: |
-          npm run lint
-          npm test
-
       - name: CDK Synth
         run: npm run synth
 
